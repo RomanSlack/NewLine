@@ -1,0 +1,417 @@
+use adw::prelude::*;
+use gtk::{gio, glib};
+use std::cell::RefCell;
+use std::path::PathBuf;
+use std::rc::Rc;
+
+use crate::document::{Document, DocumentHandle};
+use crate::project_sidebar::ProjectSidebar;
+
+pub struct MainWindow {
+    pub window: adw::ApplicationWindow,
+    sidebar: ProjectSidebar,
+    content_stack: gtk::Stack,
+    documents: Rc<RefCell<Vec<DocumentHandle>>>,
+    current_doc: Rc<RefCell<Option<DocumentHandle>>>,
+    progress_label: gtk::Label,
+    title_label: gtk::Label,
+}
+
+impl MainWindow {
+    pub fn new(app: &adw::Application) -> Rc<Self> {
+        let window = adw::ApplicationWindow::builder()
+            .application(app)
+            .title("NextLine")
+            .default_width(1000)
+            .default_height(700)
+            .build();
+
+        // Main horizontal layout with sidebar
+        let main_box = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .build();
+
+        // Create sidebar
+        let sidebar = ProjectSidebar::new();
+        main_box.append(&sidebar.widget);
+
+        // Separator
+        let separator = gtk::Separator::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .build();
+        main_box.append(&separator);
+
+        // Content area with header and editor
+        let content_box = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .hexpand(true)
+            .build();
+
+        // Header bar
+        let header = adw::HeaderBar::builder()
+            .build();
+
+        // Title in center
+        let title_label = gtk::Label::builder()
+            .label("NextLine")
+            .css_classes(["title"])
+            .build();
+        header.set_title_widget(Some(&title_label));
+
+        // Progress label on the right
+        let progress_label = gtk::Label::builder()
+            .label("")
+            .css_classes(["caption"])
+            .margin_start(12)
+            .margin_end(12)
+            .build();
+        header.pack_end(&progress_label);
+
+        // Menu button
+        let menu_btn = gtk::MenuButton::builder()
+            .icon_name("open-menu-symbolic")
+            .tooltip_text("Menu")
+            .build();
+
+        let menu = gio::Menu::new();
+        menu.append(Some("New Task (Enter)"), Some("win.new-task"));
+        menu.append(Some("Toggle Done (Ctrl+D)"), Some("win.toggle-task"));
+        menu.append(Some("Save (Ctrl+S)"), Some("win.save"));
+        menu.append(Some("Undo (Ctrl+Z)"), Some("win.undo"));
+        menu.append(Some("Redo (Ctrl+Shift+Z)"), Some("win.redo"));
+
+        let section = gio::Menu::new();
+        section.append(Some("Open Projects Folder"), Some("win.open-folder"));
+        section.append(Some("Keyboard Shortcuts"), Some("win.shortcuts"));
+        section.append(Some("About"), Some("win.about"));
+        menu.append_section(None, &section);
+
+        menu_btn.set_menu_model(Some(&menu));
+        header.pack_end(&menu_btn);
+
+        content_box.append(&header);
+
+        // Content stack for empty state and editor
+        let content_stack = gtk::Stack::builder()
+            .vexpand(true)
+            .hexpand(true)
+            .build();
+
+        // Empty state
+        let empty_state = adw::StatusPage::builder()
+            .icon_name("checkbox-checked-symbolic")
+            .title("Welcome to NextLine")
+            .description("Select a project from the sidebar or create a new one")
+            .vexpand(true)
+            .build();
+
+        let create_btn = gtk::Button::builder()
+            .label("Create New Project")
+            .css_classes(["suggested-action", "pill"])
+            .halign(gtk::Align::Center)
+            .build();
+        empty_state.set_child(Some(&create_btn));
+
+        content_stack.add_named(&empty_state, Some("empty"));
+
+        content_box.append(&content_stack);
+        main_box.append(&content_box);
+
+        // Set the toolbar view as the window content
+        window.set_content(Some(&main_box));
+
+        let main = Rc::new(Self {
+            window,
+            sidebar,
+            content_stack,
+            documents: Rc::new(RefCell::new(Vec::new())),
+            current_doc: Rc::new(RefCell::new(None)),
+            progress_label,
+            title_label,
+        });
+
+        // Setup connections
+        main.setup_actions();
+        main.setup_sidebar_callbacks();
+
+        // Connect create button
+        let main_weak = Rc::downgrade(&main);
+        create_btn.connect_clicked(move |_| {
+            if let Some(main) = main_weak.upgrade() {
+                main.sidebar.create_new_project();
+            }
+        });
+
+        main
+    }
+
+    fn setup_actions(self: &Rc<Self>) {
+        let window = &self.window;
+
+        // Save action
+        let main = Rc::downgrade(self);
+        let save_action = gio::SimpleAction::new("save", None);
+        save_action.connect_activate(move |_, _| {
+            if let Some(main) = main.upgrade() {
+                main.save_current();
+            }
+        });
+        window.add_action(&save_action);
+
+        // Undo action
+        let main = Rc::downgrade(self);
+        let undo_action = gio::SimpleAction::new("undo", None);
+        undo_action.connect_activate(move |_, _| {
+            if let Some(main) = main.upgrade() {
+                if let Some(ref doc) = *main.current_doc.borrow() {
+                    doc.borrow().undo();
+                }
+            }
+        });
+        window.add_action(&undo_action);
+
+        // Redo action
+        let main = Rc::downgrade(self);
+        let redo_action = gio::SimpleAction::new("redo", None);
+        redo_action.connect_activate(move |_, _| {
+            if let Some(main) = main.upgrade() {
+                if let Some(ref doc) = *main.current_doc.borrow() {
+                    doc.borrow().redo();
+                }
+            }
+        });
+        window.add_action(&redo_action);
+
+        // Toggle task action
+        let main = Rc::downgrade(self);
+        let toggle_action = gio::SimpleAction::new("toggle-task", None);
+        toggle_action.connect_activate(move |_, _| {
+            if let Some(main) = main.upgrade() {
+                if let Some(ref doc) = *main.current_doc.borrow() {
+                    doc.borrow().toggle_current_task();
+                    main.update_progress();
+                }
+            }
+        });
+        window.add_action(&toggle_action);
+
+        // New task action
+        let main = Rc::downgrade(self);
+        let new_task_action = gio::SimpleAction::new("new-task", None);
+        new_task_action.connect_activate(move |_, _| {
+            if let Some(main) = main.upgrade() {
+                if let Some(ref doc) = *main.current_doc.borrow() {
+                    doc.borrow().insert_new_task();
+                    main.update_progress();
+                }
+            }
+        });
+        window.add_action(&new_task_action);
+
+        // Open folder action
+        let main = Rc::downgrade(self);
+        let open_folder_action = gio::SimpleAction::new("open-folder", None);
+        open_folder_action.connect_activate(move |_, _| {
+            if let Some(main) = main.upgrade() {
+                let folder = main.sidebar.projects_dir();
+                let _ = open::that(folder);
+            }
+        });
+        window.add_action(&open_folder_action);
+
+        // About action
+        let main = Rc::downgrade(self);
+        let about_action = gio::SimpleAction::new("about", None);
+        about_action.connect_activate(move |_, _| {
+            if let Some(main) = main.upgrade() {
+                let about = gtk::AboutDialog::builder()
+                    .transient_for(&main.window)
+                    .modal(true)
+                    .program_name("NextLine")
+                    .logo_icon_name("checkbox-checked-symbolic")
+                    .version("0.1.0")
+                    .comments("A simple, GNOME-style task manager")
+                    .license_type(gtk::License::Gpl30)
+                    .authors(["Roman"])
+                    .build();
+                about.present();
+            }
+        });
+        window.add_action(&about_action);
+
+        // Shortcuts dialog action
+        let main = Rc::downgrade(self);
+        let shortcuts_action = gio::SimpleAction::new("shortcuts", None);
+        shortcuts_action.connect_activate(move |_, _| {
+            if let Some(main) = main.upgrade() {
+                main.show_shortcuts_dialog();
+            }
+        });
+        window.add_action(&shortcuts_action);
+
+        // Keyboard shortcuts
+        let app = self.window.application().unwrap();
+        app.set_accels_for_action("win.save", &["<Ctrl>s"]);
+        app.set_accels_for_action("win.undo", &["<Ctrl>z"]);
+        app.set_accels_for_action("win.redo", &["<Ctrl><Shift>z"]);
+        app.set_accels_for_action("win.toggle-task", &["<Ctrl>d"]);
+        app.set_accels_for_action("win.new-task", &["<Ctrl>Return"]);
+    }
+
+    fn setup_sidebar_callbacks(self: &Rc<Self>) {
+        let main = Rc::downgrade(self);
+        self.sidebar.set_on_file_selected(move |path| {
+            if let Some(main) = main.upgrade() {
+                main.open_document(path);
+            }
+        });
+    }
+
+    pub fn open_document(&self, path: PathBuf) {
+        // Create new document
+        let doc = Document::new(Some(path.clone()));
+
+        // Get the editor widget
+        let editor = doc.borrow().widget();
+
+        // Add to stack
+        let page_name = path.to_string_lossy().to_string();
+        self.content_stack.add_named(&editor, Some(&page_name));
+        self.content_stack.set_visible_child_name(&page_name);
+
+        // Setup key controller for the view
+        let doc_weak = Rc::downgrade(&doc);
+        let key_controller = gtk::EventControllerKey::new();
+
+        let main_progress = self.progress_label.clone();
+        let current_doc = self.current_doc.clone();
+
+        key_controller.connect_key_pressed(move |_, key, _, modifier| {
+            // Handle Enter key to auto-create new task line
+            if key == gtk::gdk::Key::Return && !modifier.contains(gtk::gdk::ModifierType::CONTROL_MASK) {
+                if let Some(doc) = doc_weak.upgrade() {
+                    // Check if we're at the end of a task line
+                    let doc_ref = doc.borrow();
+                    let content = doc_ref.get_content();
+                    let line_num = doc_ref.get_current_line_number();
+
+                    if let Some(line) = content.lines().nth(line_num) {
+                        let trimmed = line.trim_start();
+                        if trimmed.starts_with("- [") || trimmed.starts_with("- ") {
+                            // Will be handled by insert_new_task
+                            drop(doc_ref);
+                            doc.borrow().insert_new_task();
+
+                            // Update progress
+                            if let Some(ref current) = *current_doc.borrow() {
+                                let (done, total) = current.borrow().get_task_stats();
+                                if total > 0 {
+                                    main_progress.set_label(&format!("{}/{}", done, total));
+                                } else {
+                                    main_progress.set_label("");
+                                }
+                            }
+
+                            return glib::Propagation::Stop;
+                        }
+                    }
+                }
+            }
+            glib::Propagation::Proceed
+        });
+
+        doc.borrow().view.add_controller(key_controller);
+
+        // Update current doc and title
+        *self.current_doc.borrow_mut() = Some(doc.clone());
+        self.documents.borrow_mut().push(doc);
+
+        self.update_title(&path);
+        self.update_progress();
+    }
+
+    fn update_title(&self, path: &PathBuf) {
+        let name = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "Untitled".to_string());
+        self.title_label.set_label(&name);
+    }
+
+    fn update_progress(&self) {
+        if let Some(ref doc) = *self.current_doc.borrow() {
+            let (done, total) = doc.borrow().get_task_stats();
+            if total > 0 {
+                self.progress_label.set_label(&format!("{}/{}", done, total));
+            } else {
+                self.progress_label.set_label("");
+            }
+
+            // Refresh sidebar to update progress indicators
+            self.sidebar.refresh();
+        }
+    }
+
+    fn save_current(&self) {
+        if let Some(ref doc) = *self.current_doc.borrow() {
+            let _ = doc.borrow_mut().save_to_disk();
+            self.sidebar.refresh();
+        }
+    }
+
+    fn show_shortcuts_dialog(&self) {
+        let dialog = gtk::Dialog::builder()
+            .title("Keyboard Shortcuts")
+            .transient_for(&self.window)
+            .modal(true)
+            .build();
+
+        dialog.add_button("Close", gtk::ResponseType::Close);
+
+        let content = dialog.content_area();
+        content.set_margin_top(12);
+        content.set_margin_bottom(12);
+        content.set_margin_start(24);
+        content.set_margin_end(24);
+
+        let grid = gtk::Grid::builder()
+            .row_spacing(8)
+            .column_spacing(24)
+            .build();
+
+        let shortcuts = [
+            ("Ctrl+S", "Save"),
+            ("Ctrl+Z", "Undo"),
+            ("Ctrl+Shift+Z", "Redo"),
+            ("Ctrl+D", "Cycle: ⬜ → 🟠 → ✅"),
+            ("Ctrl+Enter", "New task"),
+            ("Enter", "New task (on task line)"),
+        ];
+
+        for (i, (key, action)) in shortcuts.iter().enumerate() {
+            let key_label = gtk::Label::builder()
+                .label(*key)
+                .css_classes(["dim-label"])
+                .halign(gtk::Align::End)
+                .build();
+            let action_label = gtk::Label::builder()
+                .label(*action)
+                .halign(gtk::Align::Start)
+                .build();
+            grid.attach(&key_label, 0, i as i32, 1, 1);
+            grid.attach(&action_label, 1, i as i32, 1, 1);
+        }
+
+        content.append(&grid);
+
+        dialog.connect_response(|dialog, _| {
+            dialog.close();
+        });
+
+        dialog.present();
+    }
+
+    pub fn present(&self) {
+        self.window.present();
+    }
+}

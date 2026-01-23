@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=NextLine
+Comment=A simple task manager with a text-editor feel
+Exec=nextline
+Icon=checkbox-checked-symbolic
+Terminal=false
+Type=Application
+Categories=Utility;GTK;GNOME;ProjectManagement;
+Keywords=tasks;todo;projects;
+StartupNotify=true

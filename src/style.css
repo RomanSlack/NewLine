@@ -1,0 +1,97 @@
+/* NextLine - Custom styles */
+
+/* Sidebar styling */
+.sidebar {
+    background-color: @window_bg_color;
+    border-right: 1px solid @borders;
+}
+
+.navigation-sidebar {
+    background-color: transparent;
+    padding: 6px;
+}
+
+.navigation-sidebar row {
+    border-radius: 8px;
+    margin: 2px 6px;
+}
+
+.navigation-sidebar row:selected {
+    background-color: alpha(@accent_bg_color, 0.15);
+}
+
+/* Editor styling - clean dark theme like GNOME Text Editor */
+textview,
+textview text,
+.view,
+.view text {
+    background-color: #1e1e1e;
+    color: #d4d4d4;
+}
+
+.source-view,
+.sourceview {
+    background-color: #1e1e1e;
+}
+
+/* Selection */
+textview text selection,
+.view text selection {
+    background-color: #264f78;
+}
+
+/* Scrollbar styling */
+scrollbar {
+    background-color: transparent;
+}
+
+scrollbar slider {
+    background-color: alpha(@window_fg_color, 0.3);
+    border-radius: 99px;
+    min-width: 8px;
+    min-height: 8px;
+}
+
+scrollbar slider:hover {
+    background-color: alpha(@window_fg_color, 0.5);
+}
+
+/* Progress label */
+.caption {
+    opacity: 0.7;
+    font-size: 0.9em;
+}
+
+/* Title styling */
+.title {
+    font-weight: bold;
+}
+
+/* Level bar (progress) in sidebar */
+levelbar block.filled {
+    background-color: @accent_bg_color;
+}
+
+levelbar block.empty {
+    background-color: alpha(@window_fg_color, 0.1);
+}
+
+levelbar trough {
+    min-height: 4px;
+    border-radius: 2px;
+}
+
+/* Status page styling */
+statuspage {
+    background-color: transparent;
+}
+
+/* Action rows in sidebar */
+.navigation-sidebar .activatable:hover {
+    background-color: alpha(@window_fg_color, 0.05);
+}
+
+/* Entry in dialogs */
+.dialog-content entry {
+    margin: 12px;
+}
