@@ -29,8 +29,8 @@ impl Document {
         view.set_show_line_numbers(false);  // No line numbers
         view.set_highlight_current_line(false);  // No line highlight
         view.set_vexpand(true);
-        view.set_hexpand(true);
-        view.set_wrap_mode(gtk::WrapMode::Word);
+        view.set_hexpand(false);  // Don't expand horizontally - allow wrapping
+        view.set_wrap_mode(gtk::WrapMode::WordChar);  // Wrap at words, then chars if needed
         view.set_left_margin(16);
         view.set_right_margin(16);
         view.set_top_margin(12);
@@ -72,6 +72,7 @@ impl Document {
         gtk::ScrolledWindow::builder()
             .vexpand(true)
             .hexpand(true)
+            .hscrollbar_policy(gtk::PolicyType::Never)
             .child(&self.view)
             .build()
     }

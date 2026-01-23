@@ -26,20 +26,17 @@ impl MainWindow {
             .default_height(700)
             .build();
 
-        // Main horizontal layout with sidebar
-        let main_box = gtk::Box::builder()
+        // Main horizontal layout with resizable sidebar using Paned
+        let paned = gtk::Paned::builder()
             .orientation(gtk::Orientation::Horizontal)
+            .shrink_start_child(false)
+            .shrink_end_child(false)
+            .position(220)  // Initial sidebar width
             .build();
 
         // Create sidebar
         let sidebar = ProjectSidebar::new();
-        main_box.append(&sidebar.widget);
-
-        // Separator
-        let separator = gtk::Separator::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .build();
-        main_box.append(&separator);
+        paned.set_start_child(Some(&sidebar.widget));
 
         // Content area with header and editor
         let content_box = gtk::Box::builder()
@@ -125,10 +122,10 @@ impl MainWindow {
         content_stack.add_named(&empty_state, Some("empty"));
 
         content_box.append(&content_stack);
-        main_box.append(&content_box);
+        paned.set_end_child(Some(&content_box));
 
-        // Set the toolbar view as the window content
-        window.set_content(Some(&main_box));
+        // Set the paned as the window content
+        window.set_content(Some(&paned));
 
         let main = Rc::new(Self {
             window,

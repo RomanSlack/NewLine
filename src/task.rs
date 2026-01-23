@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 pub const DONE_EMOJI: &str = "✅";
 pub const IN_PROGRESS_EMOJI: &str = "🟠";
 pub const PENDING_MARKER: &str = "-";
+// Non-breaking space to keep marker and first word together when wrapping
+pub const NBSP: &str = "\u{00A0}";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum TaskStatus {
@@ -81,9 +83,9 @@ impl Task {
 
     pub fn to_line(&self) -> String {
         match self.status {
-            TaskStatus::Done => format!("{} {}", DONE_EMOJI, self.text),
-            TaskStatus::InProgress => format!("{} {}", IN_PROGRESS_EMOJI, self.text),
-            TaskStatus::Pending => format!("{} {}", PENDING_MARKER, self.text),
+            TaskStatus::Done => format!("{}{}{}", DONE_EMOJI, NBSP, self.text),
+            TaskStatus::InProgress => format!("{}{}{}", IN_PROGRESS_EMOJI, NBSP, self.text),
+            TaskStatus::Pending => format!("{}{}{}", PENDING_MARKER, NBSP, self.text),
             TaskStatus::Note => self.text.clone(),
         }
     }
@@ -123,31 +125,32 @@ pub fn toggle_task_at_line(content: &str, line_number: usize) -> String {
                 let indent = &line[..line.len() - trimmed.len()];
 
                 // Handle emoji formats - cycle through: Pending -> InProgress -> Done -> Pending
+                // Use NBSP (non-breaking space) to keep marker with first word when wrapping
                 if trimmed.starts_with(DONE_EMOJI) {
                     // Done -> Pending
                     let text: String = trimmed.chars().skip(DONE_EMOJI.chars().count()).collect();
-                    format!("{}{} {}", indent, PENDING_MARKER, text.trim())
+                    format!("{}{}{}{}", indent, PENDING_MARKER, NBSP, text.trim())
                 } else if trimmed.starts_with(IN_PROGRESS_EMOJI) {
                     // InProgress -> Done
                     let text: String = trimmed.chars().skip(IN_PROGRESS_EMOJI.chars().count()).collect();
-                    format!("{}{} {}", indent, DONE_EMOJI, text.trim())
+                    format!("{}{}{}{}", indent, DONE_EMOJI, NBSP, text.trim())
                 } else if trimmed.starts_with(PENDING_MARKER) {
                     // Pending -> InProgress
                     let text: String = trimmed.chars().skip(PENDING_MARKER.chars().count()).collect();
-                    format!("{}{} {}", indent, IN_PROGRESS_EMOJI, text.trim())
+                    format!("{}{}{}{}", indent, IN_PROGRESS_EMOJI, NBSP, text.trim())
                 // Handle traditional markdown checkbox format
                 } else if trimmed.starts_with("- [x]") || trimmed.starts_with("- [X]") {
                     // Convert to pending emoji format
-                    format!("{}{} {}", indent, PENDING_MARKER, trimmed[5..].trim())
+                    format!("{}{}{}{}", indent, PENDING_MARKER, NBSP, trimmed[5..].trim())
                 } else if trimmed.starts_with("- [ ]") {
                     // Convert to in-progress emoji format
-                    format!("{}{} {}", indent, IN_PROGRESS_EMOJI, trimmed[5..].trim())
+                    format!("{}{}{}{}", indent, IN_PROGRESS_EMOJI, NBSP, trimmed[5..].trim())
                 } else if trimmed.starts_with("- ") {
                     // Bullet - convert to in-progress
-                    format!("{}{} {}", indent, IN_PROGRESS_EMOJI, trimmed[2..].trim())
+                    format!("{}{}{}{}", indent, IN_PROGRESS_EMOJI, NBSP, trimmed[2..].trim())
                 } else if !trimmed.is_empty() && !trimmed.starts_with('#') {
                     // Plain text - convert to in-progress task
-                    format!("{}{} {}", indent, IN_PROGRESS_EMOJI, trimmed)
+                    format!("{}{}{}{}", indent, IN_PROGRESS_EMOJI, NBSP, trimmed)
                 } else {
                     line.to_string()
                 }
@@ -164,15 +167,16 @@ pub fn create_new_task_line(current_line: &str) -> String {
     let indent = &current_line[..current_line.len() - trimmed.len()];
 
     // If current line looks like a task with emoji, create new task with pending marker
+    // Use NBSP to keep marker with first word when wrapping
     if trimmed.starts_with(DONE_EMOJI) || trimmed.starts_with(IN_PROGRESS_EMOJI) || trimmed.starts_with(PENDING_MARKER) {
-        format!("{}{} ", indent, PENDING_MARKER)
+        format!("{}{}{}", indent, PENDING_MARKER, NBSP)
     } else if trimmed.starts_with("- [") {
         // Traditional checkbox format - use emoji instead
-        format!("{}{} ", indent, PENDING_MARKER)
+        format!("{}{}{}", indent, PENDING_MARKER, NBSP)
     } else if trimmed.starts_with("- ") {
-        format!("{}- ", indent)
+        format!("{}-{}", indent, NBSP)
     } else {
-        format!("{}{} ", indent, PENDING_MARKER)
+        format!("{}{}{}", indent, PENDING_MARKER, NBSP)
     }
 }
 
