@@ -67,6 +67,15 @@ impl MainWindow {
             .build();
         header.pack_end(&progress_label);
 
+        // Collapse button - moves completed tasks to bottom
+        let collapse_btn = gtk::Button::builder()
+            .icon_name("view-sort-descending-symbolic")
+            .tooltip_text("Collapse completed tasks to bottom")
+            .css_classes(["flat"])
+            .action_name("win.collapse")
+            .build();
+        header.pack_end(&collapse_btn);
+
         // Menu button
         let menu_btn = gtk::MenuButton::builder()
             .icon_name("open-menu-symbolic")
@@ -76,6 +85,7 @@ impl MainWindow {
         let menu = gio::Menu::new();
         menu.append(Some("New Task (Enter)"), Some("win.new-task"));
         menu.append(Some("Toggle Done (Ctrl+D)"), Some("win.toggle-task"));
+        menu.append(Some("Collapse Completed"), Some("win.collapse"));
         menu.append(Some("Save (Ctrl+S)"), Some("win.save"));
         menu.append(Some("Undo (Ctrl+Z)"), Some("win.undo"));
         menu.append(Some("Redo (Ctrl+Shift+Z)"), Some("win.redo"));
@@ -207,6 +217,19 @@ impl MainWindow {
             }
         });
         window.add_action(&new_task_action);
+
+        // Collapse action
+        let main = Rc::downgrade(self);
+        let collapse_action = gio::SimpleAction::new("collapse", None);
+        collapse_action.connect_activate(move |_, _| {
+            if let Some(main) = main.upgrade() {
+                if let Some(ref doc) = *main.current_doc.borrow() {
+                    doc.borrow().collapse_completed();
+                    main.update_progress();
+                }
+            }
+        });
+        window.add_action(&collapse_action);
 
         // Open folder action
         let main = Rc::downgrade(self);

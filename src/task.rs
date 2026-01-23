@@ -1,9 +1,9 @@
 use serde::{Deserialize, Serialize};
 
-// Emoji constants
+// Task markers
 pub const DONE_EMOJI: &str = "✅";
 pub const IN_PROGRESS_EMOJI: &str = "🟠";
-pub const PENDING_MARKER: &str = "⬜";
+pub const PENDING_MARKER: &str = "-";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum TaskStatus {
@@ -174,4 +174,70 @@ pub fn create_new_task_line(current_line: &str) -> String {
     } else {
         format!("{}{} ", indent, PENDING_MARKER)
     }
+}
+
+/// Collapse completed tasks to the bottom with no blank lines between them
+/// Keep pending and in-progress tasks at top with their original formatting
+pub fn collapse_completed(content: &str) -> String {
+    let mut top_section: Vec<String> = Vec::new();
+    let mut completed_tasks: Vec<String> = Vec::new();
+    let mut current_block: Vec<String> = Vec::new();
+    let mut block_has_active_task = false;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+
+        // Check if this line is a completed task
+        let is_completed = trimmed.starts_with(DONE_EMOJI)
+            || trimmed.starts_with("- [x]")
+            || trimmed.starts_with("- [X]");
+
+        // Check if this line is an active task (pending or in-progress)
+        let is_active_task = trimmed.starts_with(IN_PROGRESS_EMOJI)
+            || trimmed.starts_with(PENDING_MARKER)
+            || trimmed.starts_with("- [ ]")
+            || (trimmed.starts_with("- ") && !is_completed);
+
+        if is_completed {
+            // If we have a block with active tasks, flush it to top section
+            if block_has_active_task {
+                top_section.extend(current_block.drain(..));
+            } else if !current_block.is_empty() {
+                // Block only has non-task content, add to top
+                top_section.extend(current_block.drain(..));
+            }
+            // Add completed task (just the task line, no surrounding whitespace)
+            completed_tasks.push(line.to_string());
+            block_has_active_task = false;
+        } else if is_active_task {
+            // This is an active task
+            current_block.push(line.to_string());
+            block_has_active_task = true;
+        } else if trimmed.is_empty() {
+            // Blank line - add to current block
+            current_block.push(line.to_string());
+        } else {
+            // Regular text (headings, notes, etc)
+            current_block.push(line.to_string());
+        }
+    }
+
+    // Flush remaining block
+    if !current_block.is_empty() {
+        top_section.extend(current_block);
+    }
+
+    // Build result: top section, then a separator, then collapsed completed tasks
+    let mut result = top_section.join("\n");
+
+    if !completed_tasks.is_empty() {
+        // Add separator if we have content above
+        if !result.trim().is_empty() {
+            result.push_str("\n\n--- Completed ---\n");
+        }
+        // Add completed tasks with no blank lines between them
+        result.push_str(&completed_tasks.join("\n"));
+    }
+
+    result
 }

@@ -190,4 +190,13 @@ impl Document {
         self.buffer.place_cursor(&line_end);
         self.buffer.insert_at_cursor(&format!("\n{}", new_task));
     }
+
+    pub fn collapse_completed(&self) {
+        let content = self.get_content();
+        let collapsed = task::collapse_completed(&content);
+        self.buffer.set_text(&collapsed);
+        // Move cursor to start
+        let start = self.buffer.start_iter();
+        self.buffer.place_cursor(&start);
+    }
 }

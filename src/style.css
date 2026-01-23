@@ -27,11 +27,18 @@ textview text,
 .view text {
     background-color: #1e1e1e;
     color: #d4d4d4;
+    caret-color: #ffffff;
 }
 
 .source-view,
 .sourceview {
     background-color: #1e1e1e;
+    caret-color: #ffffff;
+}
+
+/* Cursor styling */
+textview > text {
+    caret-color: #ffffff;
 }
 
 /* Selection */
