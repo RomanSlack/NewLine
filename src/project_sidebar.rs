@@ -11,7 +11,9 @@ use crate::task;
 pub struct ProjectSidebar {
     pub widget: gtk::Box,
     pub list_box: gtk::ListBox,
+    breadcrumb_box: gtk::Box,
     projects_dir: Rc<RefCell<PathBuf>>,
+    current_dir: Rc<RefCell<PathBuf>>,  // Current navigation path
     on_file_selected: Rc<RefCell<Option<Box<dyn Fn(PathBuf)>>>>,
     pinned: Rc<RefCell<Vec<String>>>,  // List of pinned project filenames
 }
@@ -32,7 +34,7 @@ impl ProjectSidebar {
             .css_classes(["sidebar"])
             .build();
 
-        // Header with title and new project button
+        // Header with title and buttons
         let header = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .spacing(6)
@@ -49,6 +51,14 @@ impl ProjectSidebar {
             .halign(gtk::Align::Start)
             .build();
 
+        // New group button
+        let new_group_btn = gtk::Button::builder()
+            .icon_name("folder-new-symbolic")
+            .tooltip_text("New Group")
+            .css_classes(["flat", "circular"])
+            .build();
+
+        // New project button
         let new_btn = gtk::Button::builder()
             .icon_name("list-add-symbolic")
             .tooltip_text("New Project")
@@ -56,7 +66,17 @@ impl ProjectSidebar {
             .build();
 
         header.append(&title);
+        header.append(&new_group_btn);
         header.append(&new_btn);
+
+        // Breadcrumb navigation
+        let breadcrumb_box = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(4)
+            .margin_start(12)
+            .margin_end(12)
+            .margin_bottom(6)
+            .build();
 
         // Scrollable list of projects
         let scrolled = gtk::ScrolledWindow::builder()
@@ -72,6 +92,7 @@ impl ProjectSidebar {
         scrolled.set_child(Some(&list_box));
 
         widget.append(&header);
+        widget.append(&breadcrumb_box);
         widget.append(&scrolled);
 
         // Load pinned projects
@@ -80,15 +101,25 @@ impl ProjectSidebar {
             .map(|s| s.lines().map(|l| l.to_string()).filter(|l| !l.is_empty()).collect())
             .unwrap_or_default();
 
+        let current_dir = projects_dir.clone();
+
         let sidebar = Self {
             widget,
             list_box,
+            breadcrumb_box,
             projects_dir: Rc::new(RefCell::new(projects_dir)),
+            current_dir: Rc::new(RefCell::new(current_dir)),
             on_file_selected: Rc::new(RefCell::new(None)),
             pinned: Rc::new(RefCell::new(pinned)),
         };
 
-        // Connect new button
+        // Connect new group button
+        let sidebar_clone = sidebar.clone();
+        new_group_btn.connect_clicked(move |_| {
+            sidebar_clone.create_new_group();
+        });
+
+        // Connect new project button
         let sidebar_clone = sidebar.clone();
         new_btn.connect_clicked(move |_| {
             sidebar_clone.create_new_project();
@@ -97,13 +128,17 @@ impl ProjectSidebar {
         // Connect row activation
         let sidebar_clone = sidebar.clone();
         sidebar.list_box.connect_row_activated(move |_, row| {
-            // ActionRow inherits from ListBoxRow, so row IS the ActionRow
-            // Just get the widget_name directly from the row
             let path_str = row.widget_name().to_string();
             if !path_str.is_empty() && !path_str.starts_with("Gtk") && !path_str.starts_with("Adw") {
-                let path = PathBuf::from(path_str);
-                if let Some(ref callback) = *sidebar_clone.on_file_selected.borrow() {
-                    callback(path);
+                let path = PathBuf::from(&path_str);
+                if path.is_dir() {
+                    // Navigate into the folder
+                    sidebar_clone.navigate_to(&path);
+                } else if path.is_file() {
+                    // Open the file
+                    if let Some(ref callback) = *sidebar_clone.on_file_selected.borrow() {
+                        callback(path);
+                    }
                 }
             }
         });
@@ -112,6 +147,72 @@ impl ProjectSidebar {
         sidebar.refresh();
 
         sidebar
+    }
+
+    fn navigate_to(&self, path: &PathBuf) {
+        *self.current_dir.borrow_mut() = path.clone();
+        self.refresh();
+    }
+
+    fn update_breadcrumbs(&self) {
+        // Clear existing breadcrumbs
+        while let Some(child) = self.breadcrumb_box.first_child() {
+            self.breadcrumb_box.remove(&child);
+        }
+
+        let projects_dir = self.projects_dir.borrow().clone();
+        let current_dir = self.current_dir.borrow().clone();
+
+        // Don't show breadcrumbs if we're at root
+        if current_dir == projects_dir {
+            self.breadcrumb_box.set_visible(false);
+            return;
+        }
+
+        self.breadcrumb_box.set_visible(true);
+
+        // Home button
+        let home_btn = gtk::Button::builder()
+            .icon_name("go-home-symbolic")
+            .css_classes(["flat", "circular"])
+            .tooltip_text("Back to root")
+            .build();
+
+        let sidebar = self.clone();
+        let root = projects_dir.clone();
+        home_btn.connect_clicked(move |_| {
+            sidebar.navigate_to(&root);
+        });
+        self.breadcrumb_box.append(&home_btn);
+
+        // Build path segments
+        let relative = current_dir.strip_prefix(&projects_dir).unwrap_or(&current_dir);
+        let mut accumulated = projects_dir.clone();
+
+        for component in relative.components() {
+            let segment = component.as_os_str().to_string_lossy().to_string();
+            accumulated = accumulated.join(&segment);
+
+            // Separator
+            let sep = gtk::Label::builder()
+                .label("/")
+                .css_classes(["dim-label"])
+                .build();
+            self.breadcrumb_box.append(&sep);
+
+            // Segment button
+            let btn = gtk::Button::builder()
+                .label(&segment)
+                .css_classes(["flat"])
+                .build();
+
+            let sidebar = self.clone();
+            let target = accumulated.clone();
+            btn.connect_clicked(move |_| {
+                sidebar.navigate_to(&target);
+            });
+            self.breadcrumb_box.append(&btn);
+        }
     }
 
     pub fn set_on_file_selected<F: Fn(PathBuf) + 'static>(&self, callback: F) {
@@ -124,23 +225,48 @@ impl ProjectSidebar {
             self.list_box.remove(&child);
         }
 
-        // Read project files
-        let projects_dir = self.projects_dir.borrow().clone();
+        // Update breadcrumbs
+        self.update_breadcrumbs();
+
+        // Read current directory
+        let current_dir = self.current_dir.borrow().clone();
         let pinned = self.pinned.borrow().clone();
 
-        if let Ok(entries) = std::fs::read_dir(&projects_dir) {
-            let mut files: Vec<PathBuf> = entries
-                .filter_map(|e| e.ok())
-                .map(|e| e.path())
-                .filter(|p| {
-                    p.is_file()
-                        && p.extension()
-                            .map(|e| e == "txt" || e == "md" || e == "todo")
-                            .unwrap_or(false)
-                })
-                .collect();
+        if let Ok(entries) = std::fs::read_dir(&current_dir) {
+            let mut folders: Vec<PathBuf> = Vec::new();
+            let mut files: Vec<PathBuf> = Vec::new();
 
-            // Sort: pinned first, then by modification time (newest first)
+            for entry in entries.filter_map(|e| e.ok()) {
+                let path = entry.path();
+                let name = path.file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default();
+
+                // Skip hidden files/folders
+                if name.starts_with('.') {
+                    continue;
+                }
+
+                if path.is_dir() {
+                    folders.push(path);
+                } else if path.is_file() {
+                    let ext = path.extension()
+                        .map(|e| e.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    if ext == "txt" || ext == "md" || ext == "todo" {
+                        files.push(path);
+                    }
+                }
+            }
+
+            // Sort folders alphabetically
+            folders.sort_by(|a, b| {
+                let a_name = a.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
+                let b_name = b.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
+                a_name.cmp(&b_name)
+            });
+
+            // Sort files: pinned first, then by modification time (newest first)
             files.sort_by(|a, b| {
                 let a_name = a.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
                 let b_name = b.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
@@ -151,7 +277,6 @@ impl ProjectSidebar {
                     (true, false) => std::cmp::Ordering::Less,
                     (false, true) => std::cmp::Ordering::Greater,
                     _ => {
-                        // Same pin status, sort by modification time
                         let a_time = a.metadata().and_then(|m| m.modified()).ok();
                         let b_time = b.metadata().and_then(|m| m.modified()).ok();
                         b_time.cmp(&a_time)
@@ -159,6 +284,12 @@ impl ProjectSidebar {
                 }
             });
 
+            // Add folders first
+            for path in folders {
+                self.add_group_row(&path);
+            }
+
+            // Add files
             for path in files {
                 let is_pinned = path.file_name()
                     .map(|n| pinned.contains(&n.to_string_lossy().to_string()))
@@ -166,6 +297,104 @@ impl ProjectSidebar {
                 self.add_project_row(&path, is_pinned);
             }
         }
+    }
+
+    fn add_group_row(&self, path: &PathBuf) {
+        let row = adw::ActionRow::builder()
+            .activatable(true)
+            .build();
+
+        // Store path as widget name
+        row.set_widget_name(&path.to_string_lossy());
+
+        // Set title from folder name
+        let name = path
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "Untitled".to_string());
+        row.set_title(&name);
+
+        // Count projects in folder
+        let count = std::fs::read_dir(path)
+            .map(|entries| {
+                entries
+                    .filter_map(|e| e.ok())
+                    .filter(|e| {
+                        let p = e.path();
+                        p.is_file() && p.extension()
+                            .map(|ext| ext == "txt" || ext == "md" || ext == "todo")
+                            .unwrap_or(false)
+                    })
+                    .count()
+            })
+            .unwrap_or(0);
+
+        if count > 0 {
+            row.set_subtitle(&format!("{} projects", count));
+        }
+
+        // Folder icon
+        row.add_prefix(&gtk::Image::from_icon_name("folder-symbolic"));
+
+        // Arrow to indicate it's navigable
+        let arrow = gtk::Image::builder()
+            .icon_name("go-next-symbolic")
+            .css_classes(["dim-label"])
+            .build();
+        row.add_suffix(&arrow);
+
+        // Context menu for groups
+        let menu = gio::Menu::new();
+        menu.append(Some("Rename"), Some("group.rename"));
+        menu.append(Some("Delete"), Some("group.delete"));
+        menu.append(Some("Show in Folder"), Some("group.show-in-folder"));
+
+        let popover = gtk::PopoverMenu::from_model(Some(&menu));
+        popover.set_parent(&row);
+        popover.set_has_arrow(false);
+
+        let action_group = gio::SimpleActionGroup::new();
+
+        // Rename action
+        let path_clone = path.clone();
+        let sidebar = self.clone();
+        let rename_action = gio::SimpleAction::new("rename", None);
+        rename_action.connect_activate(move |_, _| {
+            sidebar.show_rename_group_dialog(&path_clone);
+        });
+        action_group.add_action(&rename_action);
+
+        // Delete action
+        let path_clone = path.clone();
+        let sidebar = self.clone();
+        let delete_action = gio::SimpleAction::new("delete", None);
+        delete_action.connect_activate(move |_, _| {
+            sidebar.show_delete_group_confirmation(&path_clone);
+        });
+        action_group.add_action(&delete_action);
+
+        // Show in folder action
+        let path_clone = path.clone();
+        let show_action = gio::SimpleAction::new("show-in-folder", None);
+        show_action.connect_activate(move |_, _| {
+            let _ = open::that(&path_clone);
+        });
+        action_group.add_action(&show_action);
+
+        row.insert_action_group("group", Some(&action_group));
+
+        // Right-click gesture
+        let gesture = gtk::GestureClick::new();
+        gesture.set_button(gdk::BUTTON_SECONDARY);
+        let popover_clone = popover.clone();
+        gesture.connect_pressed(move |gesture, _, x, y| {
+            gesture.set_state(gtk::EventSequenceState::Claimed);
+            popover_clone.set_pointing_to(Some(&gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+            popover_clone.popup();
+        });
+        row.add_controller(gesture);
+
+        self.list_box.append(&row);
     }
 
     fn add_project_row(&self, path: &PathBuf, is_pinned: bool) {
@@ -440,18 +669,19 @@ impl ProjectSidebar {
 
         dialog.set_default_response(gtk::ResponseType::Accept);
 
-        let projects_dir = self.projects_dir.borrow().clone();
+        // Create in current directory
+        let current_dir = self.current_dir.borrow().clone();
         let sidebar = self.clone();
 
         dialog.connect_response(move |dialog, response| {
             if response == gtk::ResponseType::Accept {
                 let name = entry.text().to_string();
                 if !name.is_empty() {
-                    let path = projects_dir.join(format!("{}.txt", name));
+                    let path = current_dir.join(format!("{}.txt", name));
 
-                    // Create initial content with emoji markers
+                    // Create initial content with task markers
                     let initial = format!(
-                        "# {}\n\n⬜ First task\n⬜ Second task\n",
+                        "# {}\n\n- First task\n- Second task\n",
                         name
                     );
 
@@ -463,6 +693,179 @@ impl ProjectSidebar {
                             callback(path);
                         }
                     }
+                }
+            }
+            dialog.close();
+        });
+
+        dialog.present();
+    }
+
+    fn create_new_group(&self) {
+        let Some(root) = self.widget.root() else { return };
+        let Some(window) = root.downcast_ref::<gtk::Window>() else { return };
+
+        let dialog = gtk::Dialog::builder()
+            .title("New Group")
+            .transient_for(window)
+            .modal(true)
+            .build();
+
+        dialog.add_button("Cancel", gtk::ResponseType::Cancel);
+        dialog.add_button("Create", gtk::ResponseType::Accept);
+
+        let content = dialog.content_area();
+        content.set_margin_top(12);
+        content.set_margin_bottom(12);
+        content.set_margin_start(12);
+        content.set_margin_end(12);
+        content.set_spacing(12);
+
+        let label = gtk::Label::builder()
+            .label("Enter a name for your new group:")
+            .halign(gtk::Align::Start)
+            .build();
+
+        let entry = gtk::Entry::builder()
+            .placeholder_text("Group name")
+            .activates_default(true)
+            .hexpand(true)
+            .build();
+
+        content.append(&label);
+        content.append(&entry);
+
+        dialog.set_default_response(gtk::ResponseType::Accept);
+
+        let current_dir = self.current_dir.borrow().clone();
+        let sidebar = self.clone();
+
+        dialog.connect_response(move |dialog, response| {
+            if response == gtk::ResponseType::Accept {
+                let name = entry.text().to_string();
+                if !name.is_empty() {
+                    let path = current_dir.join(&name);
+                    if std::fs::create_dir(&path).is_ok() {
+                        sidebar.refresh();
+                    }
+                }
+            }
+            dialog.close();
+        });
+
+        dialog.present();
+    }
+
+    fn show_rename_group_dialog(&self, path: &PathBuf) {
+        let Some(root) = self.widget.root() else { return };
+        let Some(window) = root.downcast_ref::<gtk::Window>() else { return };
+
+        let dialog = gtk::Dialog::builder()
+            .title("Rename Group")
+            .transient_for(window)
+            .modal(true)
+            .build();
+
+        dialog.add_button("Cancel", gtk::ResponseType::Cancel);
+        dialog.add_button("Rename", gtk::ResponseType::Accept);
+
+        let content = dialog.content_area();
+        content.set_margin_top(12);
+        content.set_margin_bottom(12);
+        content.set_margin_start(12);
+        content.set_margin_end(12);
+        content.set_spacing(12);
+
+        let label = gtk::Label::builder()
+            .label("Enter a new name:")
+            .halign(gtk::Align::Start)
+            .build();
+
+        let current_name = path
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        let entry = gtk::Entry::builder()
+            .text(&current_name)
+            .activates_default(true)
+            .hexpand(true)
+            .build();
+
+        content.append(&label);
+        content.append(&entry);
+
+        dialog.set_default_response(gtk::ResponseType::Accept);
+
+        let path_clone = path.clone();
+        let sidebar = self.clone();
+
+        dialog.connect_response(move |dialog, response| {
+            if response == gtk::ResponseType::Accept {
+                let new_name = entry.text().to_string();
+                if !new_name.is_empty() && new_name != current_name {
+                    let new_path = path_clone.parent()
+                        .map(|p| p.join(&new_name))
+                        .unwrap_or_else(|| PathBuf::from(&new_name));
+
+                    if std::fs::rename(&path_clone, &new_path).is_ok() {
+                        sidebar.refresh();
+                    }
+                }
+            }
+            dialog.close();
+        });
+
+        dialog.present();
+    }
+
+    fn show_delete_group_confirmation(&self, path: &PathBuf) {
+        let Some(root) = self.widget.root() else { return };
+        let Some(window) = root.downcast_ref::<gtk::Window>() else { return };
+
+        let name = path
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "this group".to_string());
+
+        let dialog = gtk::Dialog::builder()
+            .title("Delete Group")
+            .transient_for(window)
+            .modal(true)
+            .build();
+
+        dialog.add_button("Cancel", gtk::ResponseType::Cancel);
+        let delete_btn = dialog.add_button("Delete", gtk::ResponseType::Accept);
+        delete_btn.add_css_class("destructive-action");
+
+        let content = dialog.content_area();
+        content.set_margin_top(12);
+        content.set_margin_bottom(12);
+        content.set_margin_start(12);
+        content.set_margin_end(12);
+        content.set_spacing(12);
+
+        let icon = gtk::Image::builder()
+            .icon_name("dialog-warning-symbolic")
+            .pixel_size(48)
+            .build();
+
+        let label = gtk::Label::builder()
+            .label(&format!("Are you sure you want to delete \"{}\" and all its contents?\n\nThis action cannot be undone.", name))
+            .wrap(true)
+            .max_width_chars(40)
+            .build();
+
+        content.append(&icon);
+        content.append(&label);
+
+        let path_clone = path.clone();
+        let sidebar = self.clone();
+
+        dialog.connect_response(move |dialog, response| {
+            if response == gtk::ResponseType::Accept {
+                if std::fs::remove_dir_all(&path_clone).is_ok() {
+                    sidebar.refresh();
                 }
             }
             dialog.close();
