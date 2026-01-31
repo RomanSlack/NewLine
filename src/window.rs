@@ -74,6 +74,7 @@ impl MainWindow {
             .tooltip_text("Collapse completed tasks to bottom")
             .css_classes(["flat"])
             .action_name("win.collapse")
+            .cursor(&gtk::gdk::Cursor::from_name("pointer", None).unwrap())
             .build();
         header.pack_end(&collapse_btn);
 
@@ -83,6 +84,7 @@ impl MainWindow {
             .tooltip_text("Sync with cloud")
             .css_classes(["flat"])
             .action_name("win.sync")
+            .cursor(&gtk::gdk::Cursor::from_name("pointer", None).unwrap())
             .build();
 
         let sync_spinner = gtk::Spinner::builder()
@@ -99,6 +101,7 @@ impl MainWindow {
         let menu_btn = gtk::MenuButton::builder()
             .icon_name("open-menu-symbolic")
             .tooltip_text("Menu")
+            .cursor(&gtk::gdk::Cursor::from_name("pointer", None).unwrap())
             .build();
 
         let menu = gio::Menu::new();
@@ -143,6 +146,7 @@ impl MainWindow {
             .label("Create New Project")
             .css_classes(["suggested-action", "pill"])
             .halign(gtk::Align::Center)
+            .cursor(&gtk::gdk::Cursor::from_name("pointer", None).unwrap())
             .build();
         empty_state.set_child(Some(&create_btn));
 
@@ -349,9 +353,67 @@ impl MainWindow {
                 main.open_document(path);
             }
         });
+
+        let main = Rc::downgrade(self);
+        self.sidebar.set_on_file_deleted(move |deleted_path| {
+            if let Some(main) = main.upgrade() {
+                main.handle_file_deleted(&deleted_path);
+            }
+        });
+    }
+
+    fn handle_file_deleted(&self, deleted_path: &PathBuf) {
+        let page_name = deleted_path.to_string_lossy().to_string();
+
+        // Check if deleted file is currently open
+        let is_current = {
+            if let Some(ref doc) = *self.current_doc.borrow() {
+                doc.borrow().path.as_ref() == Some(deleted_path)
+            } else {
+                false
+            }
+        };
+
+        if is_current {
+            // Clear current document
+            *self.current_doc.borrow_mut() = None;
+
+            // Show empty state
+            self.content_stack.set_visible_child_name("empty");
+
+            // Reset title and progress
+            self.title_label.set_label("NextLine");
+            self.progress_label.set_label("");
+        }
+
+        // Remove the widget from the stack
+        if let Some(child) = self.content_stack.child_by_name(&page_name) {
+            self.content_stack.remove(&child);
+        }
+
+        // Remove from documents list
+        self.documents.borrow_mut().retain(|doc| {
+            doc.borrow().path.as_ref() != Some(deleted_path)
+        });
     }
 
     pub fn open_document(&self, path: PathBuf) {
+        let page_name = path.to_string_lossy().to_string();
+
+        // Check if document is already open
+        let existing_doc = self.documents.borrow().iter()
+            .find(|doc| doc.borrow().path.as_ref() == Some(&path))
+            .cloned();
+
+        if let Some(doc) = existing_doc {
+            // Document already open, just switch to it
+            self.content_stack.set_visible_child_name(&page_name);
+            *self.current_doc.borrow_mut() = Some(doc);
+            self.update_title(&path);
+            self.update_progress();
+            return;
+        }
+
         // Create new document
         let doc = Document::new(Some(path.clone()));
 
@@ -359,7 +421,6 @@ impl MainWindow {
         let editor = doc.borrow().widget();
 
         // Add to stack
-        let page_name = path.to_string_lossy().to_string();
         self.content_stack.add_named(&editor, Some(&page_name));
         self.content_stack.set_visible_child_name(&page_name);
 
@@ -430,9 +491,6 @@ impl MainWindow {
             } else {
                 self.progress_label.set_label("");
             }
-
-            // Refresh sidebar to update progress indicators
-            self.sidebar.refresh();
         }
     }
 

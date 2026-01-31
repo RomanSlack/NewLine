@@ -14,7 +14,9 @@ pub struct ProjectSidebar {
     breadcrumb_box: gtk::Box,
     projects_dir: Rc<RefCell<PathBuf>>,
     current_dir: Rc<RefCell<PathBuf>>,  // Current navigation path
+    selected_path: Rc<RefCell<Option<PathBuf>>>,  // Currently selected file
     on_file_selected: Rc<RefCell<Option<Box<dyn Fn(PathBuf)>>>>,
+    on_file_deleted: Rc<RefCell<Option<Box<dyn Fn(PathBuf)>>>>,
     pinned: Rc<RefCell<Vec<String>>>,  // List of pinned project filenames
 }
 
@@ -56,6 +58,7 @@ impl ProjectSidebar {
             .icon_name("folder-new-symbolic")
             .tooltip_text("New Group")
             .css_classes(["flat", "circular"])
+            .cursor(&gtk::gdk::Cursor::from_name("pointer", None).unwrap())
             .build();
 
         // New project button
@@ -63,6 +66,7 @@ impl ProjectSidebar {
             .icon_name("list-add-symbolic")
             .tooltip_text("New Project")
             .css_classes(["flat", "circular"])
+            .cursor(&gtk::gdk::Cursor::from_name("pointer", None).unwrap())
             .build();
 
         header.append(&title);
@@ -109,7 +113,9 @@ impl ProjectSidebar {
             breadcrumb_box,
             projects_dir: Rc::new(RefCell::new(projects_dir)),
             current_dir: Rc::new(RefCell::new(current_dir)),
+            selected_path: Rc::new(RefCell::new(None)),
             on_file_selected: Rc::new(RefCell::new(None)),
+            on_file_deleted: Rc::new(RefCell::new(None)),
             pinned: Rc::new(RefCell::new(pinned)),
         };
 
@@ -135,6 +141,8 @@ impl ProjectSidebar {
                     // Navigate into the folder
                     sidebar_clone.navigate_to(&path);
                 } else if path.is_file() {
+                    // Track selected path
+                    *sidebar_clone.selected_path.borrow_mut() = Some(path.clone());
                     // Open the file
                     if let Some(ref callback) = *sidebar_clone.on_file_selected.borrow() {
                         callback(path);
@@ -176,6 +184,7 @@ impl ProjectSidebar {
             .icon_name("go-home-symbolic")
             .css_classes(["flat", "circular"])
             .tooltip_text("Back to root")
+            .cursor(&gtk::gdk::Cursor::from_name("pointer", None).unwrap())
             .build();
 
         let sidebar = self.clone();
@@ -204,6 +213,7 @@ impl ProjectSidebar {
             let btn = gtk::Button::builder()
                 .label(&segment)
                 .css_classes(["flat"])
+                .cursor(&gtk::gdk::Cursor::from_name("pointer", None).unwrap())
                 .build();
 
             let sidebar = self.clone();
@@ -217,6 +227,10 @@ impl ProjectSidebar {
 
     pub fn set_on_file_selected<F: Fn(PathBuf) + 'static>(&self, callback: F) {
         *self.on_file_selected.borrow_mut() = Some(Box::new(callback));
+    }
+
+    pub fn set_on_file_deleted<F: Fn(PathBuf) + 'static>(&self, callback: F) {
+        *self.on_file_deleted.borrow_mut() = Some(Box::new(callback));
     }
 
     pub fn refresh(&self) {
@@ -297,11 +311,25 @@ impl ProjectSidebar {
                 self.add_project_row(&path, is_pinned);
             }
         }
+
+        // Restore selection if we have a selected path
+        if let Some(ref selected) = *self.selected_path.borrow() {
+            let selected_name = selected.to_string_lossy().to_string();
+            let mut index = 0;
+            while let Some(row) = self.list_box.row_at_index(index) {
+                if row.widget_name().to_string() == selected_name {
+                    self.list_box.select_row(Some(&row));
+                    break;
+                }
+                index += 1;
+            }
+        }
     }
 
     fn add_group_row(&self, path: &PathBuf) {
         let row = adw::ActionRow::builder()
             .activatable(true)
+            .cursor(&gtk::gdk::Cursor::from_name("pointer", None).unwrap())
             .build();
 
         // Store path as widget name
@@ -400,6 +428,7 @@ impl ProjectSidebar {
     fn add_project_row(&self, path: &PathBuf, is_pinned: bool) {
         let row = adw::ActionRow::builder()
             .activatable(true)
+            .cursor(&gtk::gdk::Cursor::from_name("pointer", None).unwrap())
             .build();
 
         // Store path as widget name
@@ -622,6 +651,14 @@ impl ProjectSidebar {
         dialog.connect_response(move |dialog, response| {
             if response == gtk::ResponseType::Accept {
                 if std::fs::remove_file(&path_clone).is_ok() {
+                    // Clear selection if deleted file was selected
+                    if sidebar.selected_path.borrow().as_ref() == Some(&path_clone) {
+                        *sidebar.selected_path.borrow_mut() = None;
+                    }
+                    // Notify that file was deleted before refreshing
+                    if let Some(ref callback) = *sidebar.on_file_deleted.borrow() {
+                        callback(path_clone.clone());
+                    }
                     sidebar.refresh();
                 }
             }
@@ -686,6 +723,8 @@ impl ProjectSidebar {
                     );
 
                     if std::fs::write(&path, initial).is_ok() {
+                        // Track selected path
+                        *sidebar.selected_path.borrow_mut() = Some(path.clone());
                         sidebar.refresh();
 
                         // Auto-select the new project

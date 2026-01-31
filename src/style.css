@@ -110,3 +110,11 @@ paned > separator {
     min-width: 1px;
 }
 
+/* Pointer cursor for interactive elements */
+button,
+menubutton,
+.navigation-sidebar row,
+checkbutton {
+    cursor: pointer;
+}
+
