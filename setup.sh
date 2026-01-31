@@ -22,7 +22,7 @@ SPINNER_CHARS="⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 print_header() {
     echo ""
     echo -e "${MAGENTA}${BOLD}╔════════════════════════════════════════════╗${NC}"
-    echo -e "${MAGENTA}${BOLD}║           NextLine Setup Wizard            ║${NC}"
+    echo -e "${MAGENTA}${BOLD}║           NewLine Setup Wizard            ║${NC}"
     echo -e "${MAGENTA}${BOLD}╚════════════════════════════════════════════╝${NC}"
     echo ""
 }
@@ -94,7 +94,7 @@ main() {
     print_header
 
     echo -e "${DIM}This wizard will:${NC}"
-    echo -e "  • Build the NextLine desktop app"
+    echo -e "  • Build the NewLine desktop app"
     echo -e "  • Install it to your applications"
     echo -e "  • Optionally: set up cloud sync across devices"
     echo ""
@@ -152,7 +152,7 @@ main() {
     fi
 
     # Step 2: Build the app
-    print_step 2 "Building NextLine"
+    print_step 2 "Building NewLine"
     print_info "This may take a few minutes on first build..."
 
     if cargo build --release > /tmp/nextline-build.log 2>&1; then
@@ -262,7 +262,7 @@ EOF
     mkdir -p ~/.local/share/applications
     cat > ~/.local/share/applications/nextline.desktop << EOF
 [Desktop Entry]
-Name=NextLine
+Name=NewLine
 Comment=Simple task management
 Exec=$HOME/.local/bin/nextline
 Icon=checkbox-checked-symbolic
@@ -302,8 +302,8 @@ EOF
         echo ""
     fi
 
-    echo -e "${BOLD}To run NextLine:${NC}"
-    echo -e "  ${DIM}•${NC} Search for 'NextLine' in your app launcher"
+    echo -e "${BOLD}To run NewLine:${NC}"
+    echo -e "  ${DIM}•${NC} Search for 'NewLine' in your app launcher"
     echo -e "  ${DIM}•${NC} Or run: ${CYAN}nextline${NC}"
     echo ""
 

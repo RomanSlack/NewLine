@@ -1,4 +1,4 @@
-# NextLine
+# NewLine
 
 ![GTK4](https://img.shields.io/badge/GTK-4-green)
 ![Rust](https://img.shields.io/badge/Rust-1.70+-orange)
@@ -9,7 +9,7 @@ A simple, GNOME-style task manager with cloud sync.
 Drop the complex sh*t and embrace the text editor.
 
 <p align="center">
-  <img src="readme_images/Next_line_ReadMe-Graphic.jpg" width="600" alt="NextLine">
+  <img src="readme_images/Next_line_ReadMe-Graphic.jpg" width="600" alt="NewLine">
 </p>
 
 ## Quick Install
@@ -114,7 +114,7 @@ Free. Cloudflare's free tier (100k requests/day, 10GB storage) is plenty for per
 ./teardown.sh
 ```
 
-Removes the Cloudflare worker, R2 bucket, and local config. Your task files in `~/Documents/NextLine` are preserved.
+Removes the Cloudflare worker, R2 bucket, and local config. Your task files in `~/Documents/NewLine` are preserved.
 
 ## Issues & Requests
 

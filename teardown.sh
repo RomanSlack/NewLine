@@ -17,7 +17,7 @@ ARROW="${CYAN}→${NC}"
 print_header() {
     echo ""
     echo -e "${RED}${BOLD}╔════════════════════════════════════════════╗${NC}"
-    echo -e "${RED}${BOLD}║         NextLine Teardown Script           ║${NC}"
+    echo -e "${RED}${BOLD}║         NewLine Teardown Script           ║${NC}"
     echo -e "${RED}${BOLD}╚════════════════════════════════════════════╝${NC}"
     echo ""
 }
@@ -69,7 +69,7 @@ main() {
     echo -e "${RED}${BOLD}╚════════════════════════════════════════════════════════╝${NC}"
     echo ""
     echo -e "${YELLOW}Before continuing, make sure your local files are up to date:${NC}"
-    echo -e "  ${DIM}Your tasks are stored locally in: ~/Documents/NextLine/${NC}"
+    echo -e "  ${DIM}Your tasks are stored locally in: ~/Documents/NewLine/${NC}"
     echo -e "  ${DIM}These local files will NOT be deleted.${NC}"
     echo ""
     echo -e "${YELLOW}If you have changes on other devices that aren't synced here,${NC}"
@@ -216,7 +216,7 @@ TOMLEOF
     fi
 
     # Remove sync state
-    PROJECTS_DIR="$HOME/Documents/NextLine"
+    PROJECTS_DIR="$HOME/Documents/NewLine"
     if [[ -f "$PROJECTS_DIR/.sync_state.json" ]]; then
         rm "$PROJECTS_DIR/.sync_state.json"
         print_success "Sync state file removed"
@@ -224,7 +224,7 @@ TOMLEOF
 
     # Ask about uninstalling the app
     echo ""
-    if ask_yes_no "Also uninstall the NextLine app?"; then
+    if ask_yes_no "Also uninstall the NewLine app?"; then
         echo -e "\n${BOLD}Uninstalling application...${NC}"
 
         if [[ -f ~/.local/bin/nextline ]]; then
@@ -254,7 +254,7 @@ TOMLEOF
     echo -e "${GREEN}${BOLD}╚════════════════════════════════════════════╝${NC}"
     echo ""
     echo -e "${DIM}Cloud sync has been disabled.${NC}"
-    echo -e "${DIM}Your local task files in ~/Documents/NextLine are safe.${NC}"
+    echo -e "${DIM}Your local task files in ~/Documents/NewLine are safe.${NC}"
     echo ""
     echo -e "${DIM}To set up sync again, run: ${CYAN}./setup.sh${NC}"
     echo ""
