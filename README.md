@@ -22,9 +22,8 @@ cd nextline
 
 The setup wizard will:
 - Build the app
-- Create your personal sync server on Cloudflare (free)
-- Configure everything automatically
 - Install to your applications
+- Optionally set up cloud sync via Cloudflare (free)
 
 ## Features
 
@@ -39,7 +38,7 @@ The setup wizard will:
 
 - Linux with GTK4
 - Rust 1.70+
-- Node.js 18+ (for Cloudflare deployment)
+- Node.js 18+ (only for cloud sync)
 
 ### Ubuntu/Debian
 ```bash
@@ -108,6 +107,14 @@ Copy `~/.config/nextline/config.json` to your other device, or run `./setup.sh` 
 ## Cost
 
 Free. Cloudflare's free tier (100k requests/day, 10GB storage) is plenty for personal use.
+
+## Uninstall
+
+```bash
+./teardown.sh
+```
+
+Removes the Cloudflare worker, R2 bucket, and local config. Your task files in `~/Documents/NextLine` are preserved.
 
 ## Issues & Requests
 

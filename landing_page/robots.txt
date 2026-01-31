@@ -1,0 +1,9 @@
+# NextLine - robots.txt
+# Author: Roman Slack
+
+# Allow all crawlers including AI
+User-agent: *
+Allow: /
+
+# Sitemap
+Sitemap: https://romanslack.github.io/NewLine/sitemap.xml

@@ -28,7 +28,7 @@ print_header() {
 }
 
 print_step() {
-    echo -e "\n${BLUE}${BOLD}[$1/7]${NC} ${BOLD}$2${NC}"
+    echo -e "\n${BLUE}${BOLD}[$1/$TOTAL_STEPS]${NC} ${BOLD}$2${NC}"
 }
 
 print_success() {
@@ -95,8 +95,8 @@ main() {
 
     echo -e "${DIM}This wizard will:${NC}"
     echo -e "  • Build the NextLine desktop app"
-    echo -e "  • Deploy your personal sync server to Cloudflare"
-    echo -e "  • Configure everything automatically"
+    echo -e "  • Install it to your applications"
+    echo -e "  • Optionally: set up cloud sync across devices"
     echo ""
 
     if ! ask_yes_no "Ready to begin?"; then
@@ -104,19 +104,38 @@ main() {
         exit 0
     fi
 
+    echo ""
+    echo -e "${BOLD}Cloud Sync${NC}"
+    echo -e "${DIM}Sync your tasks across devices using a free Cloudflare account.${NC}"
+    echo -e "${DIM}Requires: Node.js, free Cloudflare account (100k req/day, 10GB storage)${NC}"
+    echo ""
+
+    SETUP_SYNC=false
+    if ask_yes_no "Set up cloud sync?"; then
+        SETUP_SYNC=true
+        TOTAL_STEPS=7
+    else
+        TOTAL_STEPS=3
+    fi
+
     # Step 1: Check dependencies
     print_step 1 "Checking dependencies"
 
     local missing=0
     check_command cargo || missing=1
-    check_command npm || missing=1
-    check_command npx || missing=1
+
+    if [[ "$SETUP_SYNC" == "true" ]]; then
+        check_command npm || missing=1
+        check_command npx || missing=1
+    fi
 
     if [[ $missing -eq 1 ]]; then
         echo ""
         print_error "Missing dependencies. Please install:"
         echo -e "  ${DIM}• Rust: https://rustup.rs${NC}"
-        echo -e "  ${DIM}• Node.js: https://nodejs.org${NC}"
+        if [[ "$SETUP_SYNC" == "true" ]]; then
+            echo -e "  ${DIM}• Node.js: https://nodejs.org${NC}"
+        fi
         exit 1
     fi
 
@@ -143,74 +162,75 @@ main() {
         exit 1
     fi
 
-    # Step 3: Setup Cloudflare
-    print_step 3 "Setting up Cloudflare"
+    if [[ "$SETUP_SYNC" == "true" ]]; then
+        # Step 3: Setup Cloudflare
+        print_step 3 "Setting up Cloudflare"
 
-    # Install worker dependencies
-    print_info "Installing worker dependencies..."
-    cd nextline-worker
-    npm install --silent > /dev/null 2>&1
-    print_success "Dependencies installed"
+        # Install worker dependencies
+        print_info "Installing worker dependencies..."
+        cd nextline-worker
+        npm install --silent > /dev/null 2>&1
+        print_success "Dependencies installed"
 
-    # Check if already logged in
-    if ! npx wrangler whoami > /dev/null 2>&1; then
-        echo ""
-        print_info "Opening browser for Cloudflare login..."
-        print_info "Please authorize the application in your browser"
-        echo ""
+        # Check if already logged in
+        if ! npx wrangler whoami > /dev/null 2>&1; then
+            echo ""
+            print_info "Opening browser for Cloudflare login..."
+            print_info "Please authorize the application in your browser"
+            echo ""
 
-        if ! npx wrangler login; then
-            print_error "Cloudflare login failed"
+            if ! npx wrangler login; then
+                print_error "Cloudflare login failed"
+                exit 1
+            fi
+        fi
+        print_success "Logged into Cloudflare"
+
+        # Get account info
+        ACCOUNT_INFO=$(npx wrangler whoami 2>/dev/null | grep -E "account|Account" | head -1 || echo "")
+        if [[ -n "$ACCOUNT_INFO" ]]; then
+            print_info "$ACCOUNT_INFO"
+        fi
+
+        # Step 4: Create R2 bucket
+        print_step 4 "Creating R2 storage bucket"
+
+        if npx wrangler r2 bucket list 2>/dev/null | grep -q "nextline-sync"; then
+            print_success "Bucket 'nextline-sync' already exists"
+        else
+            if npx wrangler r2 bucket create nextline-sync > /dev/null 2>&1; then
+                print_success "Created bucket 'nextline-sync'"
+            else
+                print_warning "Bucket may already exist, continuing..."
+            fi
+        fi
+
+        # Step 5: Deploy worker
+        print_step 5 "Deploying sync worker"
+
+        DEPLOY_OUTPUT=$(npx wrangler deploy 2>&1)
+        WORKER_URL=$(echo "$DEPLOY_OUTPUT" | grep -oE 'https://[a-zA-Z0-9.-]+\.workers\.dev' | head -1)
+
+        if [[ -z "$WORKER_URL" ]]; then
+            print_error "Failed to deploy worker"
+            echo "$DEPLOY_OUTPUT"
             exit 1
         fi
-    fi
-    print_success "Logged into Cloudflare"
+        print_success "Worker deployed"
+        print_info "URL: ${CYAN}$WORKER_URL${NC}"
 
-    # Get account info
-    ACCOUNT_INFO=$(npx wrangler whoami 2>/dev/null | grep -E "account|Account" | head -1 || echo "")
-    if [[ -n "$ACCOUNT_INFO" ]]; then
-        print_info "$ACCOUNT_INFO"
-    fi
+        # Step 6: Generate and set API key
+        print_step 6 "Configuring authentication"
 
-    # Step 4: Create R2 bucket
-    print_step 4 "Creating R2 storage bucket"
+        API_KEY=$(openssl rand -hex 32)
+        print_success "Generated secure API key"
 
-    if npx wrangler r2 bucket list 2>/dev/null | grep -q "nextline-sync"; then
-        print_success "Bucket 'nextline-sync' already exists"
-    else
-        if npx wrangler r2 bucket create nextline-sync > /dev/null 2>&1; then
-            print_success "Created bucket 'nextline-sync'"
-        else
-            print_warning "Bucket may already exist, continuing..."
-        fi
-    fi
+        echo "$API_KEY" | npx wrangler secret put API_KEY > /dev/null 2>&1
+        print_success "API key stored in Cloudflare"
 
-    # Step 5: Deploy worker
-    print_step 5 "Deploying sync worker"
-
-    DEPLOY_OUTPUT=$(npx wrangler deploy 2>&1)
-    WORKER_URL=$(echo "$DEPLOY_OUTPUT" | grep -oE 'https://[a-zA-Z0-9.-]+\.workers\.dev' | head -1)
-
-    if [[ -z "$WORKER_URL" ]]; then
-        print_error "Failed to deploy worker"
-        echo "$DEPLOY_OUTPUT"
-        exit 1
-    fi
-    print_success "Worker deployed"
-    print_info "URL: ${CYAN}$WORKER_URL${NC}"
-
-    # Step 6: Generate and set API key
-    print_step 6 "Configuring authentication"
-
-    API_KEY=$(openssl rand -hex 32)
-    print_success "Generated secure API key"
-
-    echo "$API_KEY" | npx wrangler secret put API_KEY > /dev/null 2>&1
-    print_success "API key stored in Cloudflare"
-
-    # Create local config
-    mkdir -p ~/.config/nextline
-    cat > ~/.config/nextline/config.json << EOF
+        # Create local config
+        mkdir -p ~/.config/nextline
+        cat > ~/.config/nextline/config.json << EOF
 {
   "sync": {
     "enabled": true,
@@ -219,12 +239,17 @@ main() {
   }
 }
 EOF
-    print_success "Local config saved to ~/.config/nextline/config.json"
+        print_success "Local config saved to ~/.config/nextline/config.json"
 
-    cd ..
+        cd ..
+    fi
 
-    # Step 7: Install application
-    print_step 7 "Installing application"
+    # Final step: Install application
+    if [[ "$SETUP_SYNC" == "true" ]]; then
+        print_step 7 "Installing application"
+    else
+        print_step 3 "Installing application"
+    fi
 
     # Create local bin directory
     mkdir -p ~/.local/bin
@@ -266,29 +291,38 @@ EOF
     echo -e "${GREEN}${BOLD}║            Setup Complete! 🎉              ║${NC}"
     echo -e "${GREEN}${BOLD}╚════════════════════════════════════════════╝${NC}"
     echo ""
-    echo -e "${BOLD}Your sync server:${NC}"
-    echo -e "  ${CYAN}$WORKER_URL${NC}"
-    echo ""
-    echo -e "${BOLD}Cloudflare Dashboard:${NC}"
-    echo -e "  ${CYAN}https://dash.cloudflare.com/${NC}"
-    echo -e "  ${DIM}(View Workers & R2 storage there)${NC}"
-    echo ""
+
+    if [[ "$SETUP_SYNC" == "true" ]]; then
+        echo -e "${BOLD}Your sync server:${NC}"
+        echo -e "  ${CYAN}$WORKER_URL${NC}"
+        echo ""
+        echo -e "${BOLD}Cloudflare Dashboard:${NC}"
+        echo -e "  ${CYAN}https://dash.cloudflare.com/${NC}"
+        echo -e "  ${DIM}(View Workers & R2 storage there)${NC}"
+        echo ""
+    fi
+
     echo -e "${BOLD}To run NextLine:${NC}"
     echo -e "  ${DIM}•${NC} Search for 'NextLine' in your app launcher"
     echo -e "  ${DIM}•${NC} Or run: ${CYAN}nextline${NC}"
     echo ""
-    echo -e "${BOLD}To sync on another device:${NC}"
-    echo -e "  Create ${CYAN}~/.config/nextline/config.json${NC} with:"
-    echo -e "  ${DIM}{"
-    echo -e "    \"sync\": {"
-    echo -e "      \"enabled\": true,"
-    echo -e "      \"url\": \"$WORKER_URL\","
-    echo -e "      \"api_key\": \"$API_KEY\""
-    echo -e "    }"
-    echo -e "  }${NC}"
-    echo ""
-    echo -e "${DIM}Your API key is stored securely in Cloudflare and locally.${NC}"
-    echo -e "${DIM}Free tier: 100k requests/day, 10GB storage.${NC}"
+
+    if [[ "$SETUP_SYNC" == "true" ]]; then
+        echo -e "${BOLD}To sync on another device:${NC}"
+        echo -e "  Create ${CYAN}~/.config/nextline/config.json${NC} with:"
+        echo -e "  ${DIM}{"
+        echo -e "    \"sync\": {"
+        echo -e "      \"enabled\": true,"
+        echo -e "      \"url\": \"$WORKER_URL\","
+        echo -e "      \"api_key\": \"$API_KEY\""
+        echo -e "    }"
+        echo -e "  }${NC}"
+        echo ""
+        echo -e "${DIM}Your API key is stored securely in Cloudflare and locally.${NC}"
+        echo -e "${DIM}Free tier: 100k requests/day, 10GB storage.${NC}"
+    else
+        echo -e "${DIM}To enable cloud sync later, run: ${CYAN}./setup.sh${NC}"
+    fi
     echo ""
 }
 
