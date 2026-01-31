@@ -6,6 +6,7 @@ use std::rc::Rc;
 
 use crate::document::{Document, DocumentHandle};
 use crate::project_sidebar::ProjectSidebar;
+use crate::sync::state::AppConfig;
 
 pub struct MainWindow {
     pub window: adw::ApplicationWindow,
@@ -15,6 +16,9 @@ pub struct MainWindow {
     current_doc: Rc<RefCell<Option<DocumentHandle>>>,
     progress_label: gtk::Label,
     title_label: gtk::Label,
+    sync_button: gtk::Button,
+    sync_spinner: gtk::Spinner,
+    toast_overlay: adw::ToastOverlay,
 }
 
 impl MainWindow {
@@ -73,6 +77,24 @@ impl MainWindow {
             .build();
         header.pack_end(&collapse_btn);
 
+        // Sync button with spinner overlay
+        let sync_button = gtk::Button::builder()
+            .icon_name("emblem-synchronizing-symbolic")
+            .tooltip_text("Sync with cloud")
+            .css_classes(["flat"])
+            .action_name("win.sync")
+            .build();
+
+        let sync_spinner = gtk::Spinner::builder()
+            .visible(false)
+            .build();
+
+        // Create overlay for sync button with spinner
+        let sync_overlay = gtk::Overlay::new();
+        sync_overlay.set_child(Some(&sync_button));
+        sync_overlay.add_overlay(&sync_spinner);
+        header.pack_end(&sync_overlay);
+
         // Menu button
         let menu_btn = gtk::MenuButton::builder()
             .icon_name("open-menu-symbolic")
@@ -86,6 +108,11 @@ impl MainWindow {
         menu.append(Some("Save (Ctrl+S)"), Some("win.save"));
         menu.append(Some("Undo (Ctrl+Z)"), Some("win.undo"));
         menu.append(Some("Redo (Ctrl+Shift+Z)"), Some("win.redo"));
+
+        let sync_section = gio::Menu::new();
+        sync_section.append(Some("Sync Now"), Some("win.sync"));
+        sync_section.append(Some("Configure Sync..."), Some("win.configure-sync"));
+        menu.append_section(None, &sync_section);
 
         let section = gio::Menu::new();
         section.append(Some("Open Projects Folder"), Some("win.open-folder"));
@@ -124,8 +151,12 @@ impl MainWindow {
         content_box.append(&content_stack);
         paned.set_end_child(Some(&content_box));
 
-        // Set the paned as the window content
-        window.set_content(Some(&paned));
+        // Wrap everything in a toast overlay
+        let toast_overlay = adw::ToastOverlay::new();
+        toast_overlay.set_child(Some(&paned));
+
+        // Set the toast overlay as the window content
+        window.set_content(Some(&toast_overlay));
 
         let main = Rc::new(Self {
             window,
@@ -135,6 +166,9 @@ impl MainWindow {
             current_doc: Rc::new(RefCell::new(None)),
             progress_label,
             title_label,
+            sync_button,
+            sync_spinner,
+            toast_overlay,
         });
 
         // Setup connections
@@ -268,6 +302,36 @@ impl MainWindow {
             }
         });
         window.add_action(&shortcuts_action);
+
+        // Sync action
+        let main = Rc::downgrade(self);
+        let sync_action = gio::SimpleAction::new("sync", None);
+        sync_action.connect_activate(move |_, _| {
+            if let Some(main) = main.upgrade() {
+                main.perform_sync();
+            }
+        });
+        window.add_action(&sync_action);
+
+        // Refresh sidebar action (used internally after sync)
+        let main = Rc::downgrade(self);
+        let refresh_sidebar_action = gio::SimpleAction::new("refresh-sidebar", None);
+        refresh_sidebar_action.connect_activate(move |_, _| {
+            if let Some(main) = main.upgrade() {
+                main.sidebar.refresh();
+            }
+        });
+        window.add_action(&refresh_sidebar_action);
+
+        // Configure sync action
+        let main = Rc::downgrade(self);
+        let configure_sync_action = gio::SimpleAction::new("configure-sync", None);
+        configure_sync_action.connect_activate(move |_, _| {
+            if let Some(main) = main.upgrade() {
+                main.show_sync_config_dialog();
+            }
+        });
+        window.add_action(&configure_sync_action);
 
         // Keyboard shortcuts
         let app = self.window.application().unwrap();
@@ -433,5 +497,180 @@ impl MainWindow {
 
     pub fn present(&self) {
         self.window.present();
+    }
+
+    fn perform_sync(&self) {
+        // Save current document first
+        self.save_current();
+
+        // Check if sync is configured
+        let config = AppConfig::load();
+        if !config.sync.is_configured() {
+            self.show_toast("Sync not configured. Use menu to configure.");
+            return;
+        }
+
+        // Show spinner
+        self.sync_button.set_visible(false);
+        self.sync_spinner.set_visible(true);
+        self.sync_spinner.start();
+
+        let projects_dir = self.sidebar.projects_dir();
+        let sync_button = self.sync_button.clone();
+        let sync_spinner = self.sync_spinner.clone();
+        let toast_overlay = self.toast_overlay.clone();
+
+        let window = self.window.clone();
+
+        // Use a channel to send result from background thread to main thread
+        let (tx, rx) = std::sync::mpsc::channel::<Result<String, String>>();
+
+        // Run sync in background thread
+        std::thread::spawn(move || {
+            let result: Result<String, String> = match crate::sync::SyncManager::new(&projects_dir) {
+                Ok(mut manager) => match manager.sync() {
+                    Ok(sync_result) => Ok(sync_result.summary()),
+                    Err(e) => Err(e.to_string()),
+                },
+                Err(e) => Err(e.to_string()),
+            };
+            let _ = tx.send(result);
+        });
+
+        // Poll for result using glib timeout (runs on main thread)
+        glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
+            match rx.try_recv() {
+                Ok(result) => {
+                    sync_spinner.stop();
+                    sync_spinner.set_visible(false);
+                    sync_button.set_visible(true);
+
+                    match result {
+                        Ok(summary) => {
+                            let toast = adw::Toast::new(&summary);
+                            toast.set_timeout(3);
+                            toast_overlay.add_toast(toast);
+                        }
+                        Err(e) => {
+                            let toast = adw::Toast::new(&format!("Sync failed: {}", e));
+                            toast.set_timeout(5);
+                            toast_overlay.add_toast(toast);
+                        }
+                    }
+
+                    // Trigger sidebar refresh via action
+                    if let Some(action) = window.lookup_action("refresh-sidebar") {
+                        action.activate(None);
+                    }
+
+                    glib::ControlFlow::Break
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    // Thread ended without sending - shouldn't happen
+                    sync_spinner.stop();
+                    sync_spinner.set_visible(false);
+                    sync_button.set_visible(true);
+                    glib::ControlFlow::Break
+                }
+            }
+        });
+    }
+
+    fn show_toast(&self, message: &str) {
+        let toast = adw::Toast::new(message);
+        toast.set_timeout(3);
+        self.toast_overlay.add_toast(toast);
+    }
+
+    fn show_sync_config_dialog(&self) {
+        let config = AppConfig::load();
+
+        let dialog = gtk::Dialog::builder()
+            .title("Configure Sync")
+            .transient_for(&self.window)
+            .modal(true)
+            .build();
+
+        dialog.add_button("Cancel", gtk::ResponseType::Cancel);
+        dialog.add_button("Save", gtk::ResponseType::Accept);
+
+        let content = dialog.content_area();
+        content.set_margin_top(12);
+        content.set_margin_bottom(12);
+        content.set_margin_start(24);
+        content.set_margin_end(24);
+        content.set_spacing(12);
+
+        // Enabled checkbox
+        let enabled_check = gtk::CheckButton::builder()
+            .label("Enable cloud sync")
+            .active(config.sync.enabled)
+            .build();
+        content.append(&enabled_check);
+
+        // URL entry
+        let url_box = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(4)
+            .build();
+        let url_label = gtk::Label::builder()
+            .label("Sync URL")
+            .halign(gtk::Align::Start)
+            .build();
+        let url_entry = gtk::Entry::builder()
+            .placeholder_text("https://nextline-sync.your.workers.dev")
+            .text(&config.sync.url)
+            .hexpand(true)
+            .build();
+        url_box.append(&url_label);
+        url_box.append(&url_entry);
+        content.append(&url_box);
+
+        // API key entry
+        let key_box = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(4)
+            .build();
+        let key_label = gtk::Label::builder()
+            .label("API Key")
+            .halign(gtk::Align::Start)
+            .build();
+        let key_entry = gtk::PasswordEntry::builder()
+            .placeholder_text("Your secret API key")
+            .show_peek_icon(true)
+            .hexpand(true)
+            .build();
+        key_entry.set_text(&config.sync.api_key);
+        key_box.append(&key_label);
+        key_box.append(&key_entry);
+        content.append(&key_box);
+
+        // Help text
+        let help_label = gtk::Label::builder()
+            .label("Set up a Cloudflare Worker with R2 storage.\nSee documentation for deployment instructions.")
+            .css_classes(["dim-label", "caption"])
+            .halign(gtk::Align::Start)
+            .wrap(true)
+            .build();
+        content.append(&help_label);
+
+        dialog.connect_response(move |dialog, response| {
+            if response == gtk::ResponseType::Accept {
+                let new_config = AppConfig {
+                    sync: crate::sync::state::SyncConfig {
+                        enabled: enabled_check.is_active(),
+                        url: url_entry.text().to_string(),
+                        api_key: key_entry.text().to_string(),
+                    },
+                };
+                if let Err(e) = new_config.save() {
+                    eprintln!("Failed to save config: {}", e);
+                }
+            }
+            dialog.close();
+        });
+
+        dialog.present();
     }
 }

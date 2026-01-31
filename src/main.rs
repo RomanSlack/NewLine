@@ -3,6 +3,7 @@ mod window;
 mod document;
 mod project_sidebar;
 mod task;
+mod sync;
 
 use application::NextLineApp;
 

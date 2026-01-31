@@ -1,0 +1,10 @@
+name = "nextline-sync"
+main = "src/index.ts"
+compatibility_date = "2024-11-01"
+
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "nextline-sync"
+
+[vars]
+# API_KEY should be set via `wrangler secret put API_KEY`
