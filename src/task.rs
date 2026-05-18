@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 pub const DONE_EMOJI: &str = "✅";
 pub const IN_PROGRESS_EMOJI: &str = "🟠";
 pub const PENDING_MARKER: &str = "-";
+pub const COMPLETED_SECTION_HEADER: &str = "--- Completed ---";
 // Non-breaking space to keep marker and first word together when wrapping
 pub const NBSP: &str = "\u{00A0}";
 
@@ -162,6 +163,33 @@ pub fn toggle_task_at_line(content: &str, line_number: usize) -> String {
         .join("\n")
 }
 
+/// Toggle a single line's task status without rebuilding the whole document
+pub fn toggle_single_line(line: &str) -> String {
+    let trimmed = line.trim_start();
+    let indent = &line[..line.len() - trimmed.len()];
+
+    if trimmed.starts_with(DONE_EMOJI) {
+        let text: String = trimmed.chars().skip(DONE_EMOJI.chars().count()).collect();
+        format!("{}{}{}{}", indent, PENDING_MARKER, NBSP, text.trim())
+    } else if trimmed.starts_with(IN_PROGRESS_EMOJI) {
+        let text: String = trimmed.chars().skip(IN_PROGRESS_EMOJI.chars().count()).collect();
+        format!("{}{}{}{}", indent, DONE_EMOJI, NBSP, text.trim())
+    } else if trimmed.starts_with(PENDING_MARKER) {
+        let text: String = trimmed.chars().skip(PENDING_MARKER.chars().count()).collect();
+        format!("{}{}{}{}", indent, IN_PROGRESS_EMOJI, NBSP, text.trim())
+    } else if trimmed.starts_with("- [x]") || trimmed.starts_with("- [X]") {
+        format!("{}{}{}{}", indent, PENDING_MARKER, NBSP, trimmed[5..].trim())
+    } else if trimmed.starts_with("- [ ]") {
+        format!("{}{}{}{}", indent, IN_PROGRESS_EMOJI, NBSP, trimmed[5..].trim())
+    } else if trimmed.starts_with("- ") {
+        format!("{}{}{}{}", indent, IN_PROGRESS_EMOJI, NBSP, trimmed[2..].trim())
+    } else if !trimmed.is_empty() && !trimmed.starts_with('#') {
+        format!("{}{}{}{}", indent, IN_PROGRESS_EMOJI, NBSP, trimmed)
+    } else {
+        line.to_string()
+    }
+}
+
 pub fn create_new_task_line(current_line: &str) -> String {
     let trimmed = current_line.trim_start();
     let indent = &current_line[..current_line.len() - trimmed.len()];
@@ -190,6 +218,11 @@ pub fn collapse_completed(content: &str) -> String {
 
     for line in content.lines() {
         let trimmed = line.trim();
+
+        // Drop any existing generated section header so collapse stays idempotent.
+        if trimmed == COMPLETED_SECTION_HEADER {
+            continue;
+        }
 
         // Check if this line is a completed task
         let is_completed = trimmed.starts_with(DONE_EMOJI)
@@ -231,17 +264,67 @@ pub fn collapse_completed(content: &str) -> String {
         top_section.extend(current_block);
     }
 
+    while top_section
+        .last()
+        .map(|line| line.trim().is_empty())
+        .unwrap_or(false)
+    {
+        top_section.pop();
+    }
+
     // Build result: top section, then a separator, then collapsed completed tasks
     let mut result = top_section.join("\n");
 
     if !completed_tasks.is_empty() {
         // Add separator if we have content above
         if !result.trim().is_empty() {
-            result.push_str("\n\n--- Completed ---\n");
+            result.push_str(&format!("\n\n{}\n", COMPLETED_SECTION_HEADER));
         }
         // Add completed tasks with no blank lines between them
         result.push_str(&completed_tasks.join("\n"));
     }
 
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn collapse_completed_moves_done_tasks_below_header() {
+        let input = format!(
+            "# Project\n\n{}{}Task one\n{}{}Task two\n{}{}Task three",
+            PENDING_MARKER, NBSP, DONE_EMOJI, NBSP, IN_PROGRESS_EMOJI, NBSP
+        );
+
+        let output = collapse_completed(&input);
+
+        let expected = format!(
+            "# Project\n\n{}{}Task one\n{}{}Task three\n\n{}\n{}{}Task two",
+            PENDING_MARKER,
+            NBSP,
+            IN_PROGRESS_EMOJI,
+            NBSP,
+            COMPLETED_SECTION_HEADER,
+            DONE_EMOJI,
+            NBSP
+        );
+
+        assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn collapse_completed_is_idempotent() {
+        let input = format!(
+            "# Project\n\n{}{}Task one\n\n{}\n{}{}Task two",
+            PENDING_MARKER, NBSP, COMPLETED_SECTION_HEADER, DONE_EMOJI, NBSP
+        );
+
+        let once = collapse_completed(&input);
+        let twice = collapse_completed(&once);
+
+        assert_eq!(once, twice);
+        assert_eq!(once.matches(COMPLETED_SECTION_HEADER).count(), 1);
+    }
 }
