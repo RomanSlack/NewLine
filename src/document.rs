@@ -156,20 +156,31 @@ impl Document {
     }
 
     pub fn toggle_current_task(&self) {
-        let content = self.get_content();
-        let line = self.get_current_line_number();
-        let new_content = task::toggle_task_at_line(&content, line);
+        let line_num = self.get_current_line_number();
 
-        // Save cursor position
-        let mark = self.buffer.get_insert();
-        let cursor = self.buffer.iter_at_mark(&mark);
-        let offset = cursor.offset();
+        // Get the current line text
+        let line_start = self.buffer.iter_at_line(line_num as i32).unwrap();
+        let mut line_end = line_start.clone();
+        if !line_end.ends_line() {
+            line_end.forward_to_line_end();
+        }
+        let line_text = self.buffer.text(&line_start, &line_end, true).to_string();
 
-        self.buffer.set_text(&new_content);
+        // Get the toggled version of just this line
+        let new_line = task::toggle_single_line(&line_text);
 
-        // Restore cursor position
-        let mut iter = self.buffer.start_iter();
-        iter.set_offset(offset.min(self.buffer.end_iter().offset()));
+        // Replace only the affected line in-place (preserves scroll position)
+        self.buffer.begin_user_action();
+        self.buffer.delete(&mut self.buffer.iter_at_line(line_num as i32).unwrap(),
+                           &mut { let mut e = self.buffer.iter_at_line(line_num as i32).unwrap(); if !e.ends_line() { e.forward_to_line_end(); } e });
+        self.buffer.insert(&mut self.buffer.iter_at_line(line_num as i32).unwrap(), &new_line);
+        self.buffer.end_user_action();
+
+        // Place cursor on the same line
+        let mut iter = self.buffer.iter_at_line(line_num as i32).unwrap();
+        if !iter.ends_line() {
+            iter.forward_to_line_end();
+        }
         self.buffer.place_cursor(&iter);
     }
 
