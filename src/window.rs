@@ -5,15 +5,20 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use crate::document::{Document, DocumentHandle};
+use crate::journal_sidebar::JournalSidebar;
 use crate::project_sidebar::ProjectSidebar;
 use crate::sync::state::AppConfig;
 
 pub struct MainWindow {
     pub window: adw::ApplicationWindow,
     sidebar: ProjectSidebar,
+    journal_sidebar: JournalSidebar,
+    sidebar_stack: gtk::Stack,
     content_stack: gtk::Stack,
     documents: Rc<RefCell<Vec<DocumentHandle>>>,
     current_doc: Rc<RefCell<Option<DocumentHandle>>>,
+    last_project_path: Rc<RefCell<Option<PathBuf>>>,
+    last_journal_path: Rc<RefCell<Option<PathBuf>>>,
     progress_label: gtk::Label,
     title_label: gtk::Label,
     sync_button: gtk::Button,
@@ -38,9 +43,18 @@ impl MainWindow {
             .position(220)  // Initial sidebar width
             .build();
 
-        // Create sidebar
+        // Create sidebars (Projects + Daily journal) inside a switchable stack
         let sidebar = ProjectSidebar::new();
-        paned.set_start_child(Some(&sidebar.widget));
+        let journal_sidebar = JournalSidebar::new();
+
+        let sidebar_stack = gtk::Stack::builder().build();
+        sidebar_stack
+            .add_titled(&sidebar.widget, Some("projects"), "Projects")
+            .set_icon_name("view-list-symbolic");
+        sidebar_stack
+            .add_titled(&journal_sidebar.widget, Some("daily"), "Daily")
+            .set_icon_name("x-office-calendar-symbolic");
+        paned.set_start_child(Some(&sidebar_stack));
 
         // Content area with header and editor
         let content_box = gtk::Box::builder()
@@ -52,12 +66,18 @@ impl MainWindow {
         let header = adw::HeaderBar::builder()
             .build();
 
-        // Title in center
+        // Tab switcher in center: Projects | Daily
+        let stack_switcher = gtk::StackSwitcher::builder()
+            .stack(&sidebar_stack)
+            .build();
+        header.set_title_widget(Some(&stack_switcher));
+
+        // Document title label (updated on open; not shown in the header anymore,
+        // the active document is indicated by the sidebar selection)
         let title_label = gtk::Label::builder()
             .label("NextLine")
             .css_classes(["title"])
             .build();
-        header.set_title_widget(Some(&title_label));
 
         // Progress label on the right
         let progress_label = gtk::Label::builder()
@@ -165,9 +185,13 @@ impl MainWindow {
         let main = Rc::new(Self {
             window,
             sidebar,
+            journal_sidebar,
+            sidebar_stack,
             content_stack,
             documents: Rc::new(RefCell::new(Vec::new())),
             current_doc: Rc::new(RefCell::new(None)),
+            last_project_path: Rc::new(RefCell::new(None)),
+            last_journal_path: Rc::new(RefCell::new(None)),
             progress_label,
             title_label,
             sync_button,
@@ -185,6 +209,24 @@ impl MainWindow {
             if let Some(main) = main_weak.upgrade() {
                 main.sidebar.create_new_project();
             }
+        });
+
+        // Make sure today's journal entry exists, and roll over to a new day if the
+        // app is left running past (Mountain-time) midnight.
+        crate::journal::ensure_today();
+        let main_weak = Rc::downgrade(&main);
+        let mut last_day = crate::journal::today();
+        glib::timeout_add_seconds_local(300, move || {
+            let Some(main) = main_weak.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            let today = crate::journal::today();
+            if today != last_day {
+                last_day = today;
+                crate::journal::ensure_today();
+                main.journal_sidebar.refresh();
+            }
+            glib::ControlFlow::Continue
         });
 
         main
@@ -360,6 +402,44 @@ impl MainWindow {
                 main.handle_file_deleted(&deleted_path);
             }
         });
+
+        // Journal entries open in the same shared editor
+        let main = Rc::downgrade(self);
+        self.journal_sidebar.set_on_file_selected(move |path| {
+            if let Some(main) = main.upgrade() {
+                main.open_document(path);
+            }
+        });
+
+        // Switching tabs: hide sync (projects-only) on Daily, and make the editor
+        // follow the tab — restore that tab's last open document.
+        let main = Rc::downgrade(self);
+        self.sidebar_stack.connect_visible_child_name_notify(move |stack| {
+            if let Some(main) = main.upgrade() {
+                let on_daily = stack.visible_child_name().as_deref() == Some("daily");
+                main.sync_button.set_visible(!on_daily);
+
+                let restore = if on_daily {
+                    main.last_journal_path.borrow().clone()
+                } else {
+                    main.last_project_path.borrow().clone()
+                };
+
+                match restore {
+                    Some(path) if path.exists() => main.open_document(path),
+                    _ if on_daily => main.journal_sidebar.open_today(),
+                    _ => main.show_empty(),
+                }
+            }
+        });
+    }
+
+    /// Show the welcome/empty state with no active document.
+    fn show_empty(&self) {
+        self.content_stack.set_visible_child_name("empty");
+        *self.current_doc.borrow_mut() = None;
+        self.title_label.set_label("NextLine");
+        self.progress_label.set_label("");
     }
 
     fn handle_file_deleted(&self, deleted_path: &PathBuf) {
@@ -399,6 +479,13 @@ impl MainWindow {
 
     pub fn open_document(&self, path: PathBuf) {
         let page_name = path.to_string_lossy().to_string();
+
+        // Remember which document is current for each tab so the editor follows the tab
+        if path.starts_with(crate::journal::journal_dir()) {
+            *self.last_journal_path.borrow_mut() = Some(path.clone());
+        } else {
+            *self.last_project_path.borrow_mut() = Some(path.clone());
+        }
 
         // Check if document is already open
         let existing_doc = self.documents.borrow().iter()
@@ -476,10 +563,16 @@ impl MainWindow {
     }
 
     fn update_title(&self, path: &PathBuf) {
-        let name = path
-            .file_stem()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_else(|| "Untitled".to_string());
+        // Journal entries get a friendly date title instead of the raw YYYY-MM-DD stem
+        let name = if path.starts_with(crate::journal::journal_dir()) {
+            crate::journal::parse_date(path)
+                .map(crate::journal::display_title)
+                .unwrap_or_else(|| "Daily".to_string())
+        } else {
+            path.file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| "Untitled".to_string())
+        };
         self.title_label.set_label(&name);
     }
 

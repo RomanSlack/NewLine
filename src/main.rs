@@ -1,6 +1,8 @@
 mod application;
 mod window;
 mod document;
+mod journal;
+mod journal_sidebar;
 mod project_sidebar;
 mod task;
 mod sync;
